@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import sys
 import time
 import struct
 import asyncio
@@ -33,11 +34,11 @@ import pd303_pb2_v4 as pd303_pb2
 #   "Network" tab. Then login and find POST to https://api-a.ecoflow.com/auth/login - the response
 #   contains json, which have data.user.userId field string.
 #USER_ID = "1234567890123456789"
-USER_ID = None
+USER_ID = sys.argv[1] if len(sys.argv) > 1 else None
 
 # BT Address to connect to - otherwise will just print the found devices and bail
 #ADDRESS = "A1:B2:C3:D4:E5:F6"
-ADDRESS = None
+ADDRESS = sys.argv[2] if len(sys.argv) > 2 else None
 
 _login_key = b''
 with open('login_key.bin', 'rb') as file:
@@ -63,6 +64,10 @@ def getEcdhTypeSize(curve_num: int):
             return 64
         case _:
             return 40
+
+class SmartBackupMode:
+    OFF = 0
+    ON  = 2
 
 class Device:
     MANUFACTURER_KEY = 0xb5b5
@@ -635,11 +640,14 @@ class Connection:
             processed = False
             send_reply = False
 
+            # Common logic
             if packet.src == 0x35 and packet.cmdSet == 0x35 and packet.cmdId == 0x86: # Handling autoAuthentication response
                 if packet.payload != b'\x00':
                     # TODO: Most probably we need to follow some other way for auth, but happens rarely
                     raise Exception("%s: ERROR: Auth failed with response: %r" % (self._address, bytearray(packet.payload).hex()))
                 print("%s: Auth success" % (self._address,))
+
+            # PD303 logic
             if packet.src == 0x0B and packet.cmdSet == 0x0C:
                 if packet.cmdId == 0x01:
                     p = pd303_pb2.ProtoTime()
@@ -658,20 +666,22 @@ class Connection:
                     p.ParseFromString(packet.payload)
                     processed = True
                     print("PD303 isGetCfgFlag back:", str(p))
-            elif packet.src == 0x35 and packet.cmdSet == 0x01 and packet.cmdId == Packet.NET_BLE_COMMAND_CMD_SET_RET_TIME:
-                print("%s: PD303: Device connected & ready: %r" % (self._address, packet))
-                # Device requested for time and timezone offset, so responding with that
-                # otherwise it will not be able to send us predictions and config data
-                if len(packet.payload) == 0:
-                    print("%s: PD303: Responding with RTC data to device" % (self._address,))
-                    await self.sendUtcTime()
-                    await self.sendRTCRespond()
-                    await self.sendRTCCheck()
-                processed = True
             elif packet.src == 0x0B and packet.cmdSet == 0x01 and packet.cmdId == 0x55:
                 # Device is ready so send it the config request
                 print("%s: PD303: Requesting config from device" % (self._address,))
                 await self.enableConfigData()
+                processed = True
+
+            # Common logic
+            elif packet.src == 0x35 and packet.cmdSet == 0x01 and packet.cmdId == Packet.NET_BLE_COMMAND_CMD_SET_RET_TIME:
+                print("%s: Common: Device connected & ready: %r" % (self._address, packet))
+                # Device requested for time and timezone offset, so responding with that
+                # otherwise it will not be able to send us predictions and config data
+                if len(packet.payload) == 0:
+                    print("%s: Common: Responding with RTC data to device" % (self._address,))
+                    await self.sendUtcTime()
+                    await self.sendRTCRespond()
+                    await self.sendRTCCheck()
                 processed = True
             
             # YJ751 logic
@@ -725,7 +735,7 @@ class Connection:
 
         await self.sendPacket(packet)
 
-    async def switchCircuitOff(self, circuit_id):
+    async def switchCircuitOff(self, circuit_id: int):
         print("%s: INFO: switchCircuitOff: %d" % (self._address, circuit_id))
         #load_incre_info {
         #  hall1_incre_info {
@@ -751,7 +761,7 @@ class Connection:
 
         await self.sendPacket(packet)
 
-    async def switchCircuitOn(self, circuit_id):
+    async def switchCircuitOn(self, circuit_id: int):
         print("%s: INFO: switchCircuitOn: %d" % (self._address, circuit_id))
         #load_incre_info {
         #  hall1_incre_info {
@@ -767,6 +777,34 @@ class Connection:
         sta = getattr(ppas.load_incre_info.hall1_incre_info, 'ch'+str(circuit_id+1)+'_sta')
         sta.load_sta = pd303_pb2.LOAD_CH_STA.LOAD_CH_POWER_ON
         sta.ctrl_mode = pd303_pb2.CTRL_MODE.RLY_HAND_CTRL_MODE
+        payload = ppas.SerializeToString()
+        packet = Packet(0x21, 0x0B, 0x0C, 0x21, payload, 0x01, 0x01, 0x13)
+
+        await self.sendPacket(packet)
+
+    async def setBackupReserve(self, percent: int):
+        print("%s: INFO: setBackupReserve: %d" % (self._address, percent))
+        #ProtoPushAndSet {
+        #  backup_reserve_soc: 40
+        #}
+
+        # Forming packet
+        ppas = pd303_pb2.ProtoPushAndSet()
+        ppas.backup_reserve_soc = percent
+        payload = ppas.SerializeToString()
+        packet = Packet(0x21, 0x0B, 0x0C, 0x21, payload, 0x01, 0x01, 0x13)
+
+        await self.sendPacket(packet)
+
+    async def setSmartBackupMode(self, mode: int):  # From SmartBackupMode.*
+        print("%s: INFO: setSmartBackupMode: %d" % (self._address, mode))
+        #ProtoPushAndSet {
+        #  smart_backup_mode: 0
+        #}
+
+        # Forming packet
+        ppas = pd303_pb2.ProtoPushAndSet()
+        ppas.smart_backup_mode = mode
         payload = ppas.SerializeToString()
         packet = Packet(0x21, 0x0B, 0x0C, 0x21, payload, 0x01, 0x01, 0x13)
 
