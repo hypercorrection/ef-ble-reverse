@@ -42,10 +42,10 @@ Recognized devices:
 | *Sensors*                       | *Switches*     | *Sliders*            | *Selects*            |
 |---------------------------------|----------------|----------------------|----------------------|
 | AC Input Energy                 | AC Port        | Backup Reserve Level | Led Mode (Plus only) |
-| AC Input Power                  | DC Port        | Max Charge Limit     |                      |
+| AC Input Power                  | DC Port        | Max Charge Limit     | DC Charging Type     |
 | AC Output Energy                | Backup Reserve | Min Discharge Limit  |                      |
-| AC Output Power                 |                |                      |                      |
-| Main Battery Level (Plus only)  |                |                      |                      |
+| AC Output Power                 |                | AC Charging Speed    |                      |
+| Main Battery Level (Plus only)  |                | DC Charging Max Amps |                      |
 | Battery Level                   |                |                      |                      |
 | DC 12V Port Output Energy       |                |                      |                      |
 | DC 12V Port Output Power        |                |                      |                      |
@@ -68,29 +68,29 @@ Recognized devices:
 <b>Delta 3 (Plus, 1500) (EF-D3####, FW Version: 6.49.76.57)</b>
 </summary>
 
-| *Sensors*                           | *Switches*     | *Sliders*            |
-|-------------------------------------|----------------|----------------------|
-| Main Battery Level                  | AC Ports       | Backup Reserve Level |
-| Battery Level                       | DC Ports       | Max Charge Limit     |
-| AC Input Power                      | Backup Reserve | Min Discharge Limit  |
-| AC Output Power                     | USB Ports      |                      |
-| DC 12V Port Output Power            |                |                      |
-| DC Port Input Power                 |                |                      |
-| DC Port Input State                 |                |                      |
-| DC Port (2) Input Power (Plus only) |                |                      |
-| DC Port (2) Input State (Plus only) |                |                      |
-| Solar Power                         |                |                      |
-| Solar Power (2) (Plus only)         |                |                      |
-| Input Power Total                   |                |                      |
-| Output Power Total                  |                |                      |
-| USB A Output Power                  |                |                      |
-| USB A (2) Output Power              |                |                      |
-| USB C Output Power                  |                |                      |
-| USB C (2) Output Power              |                |                      |
-| AC Plugged In                       |                |                      |
-| Battery Input Power (disabled)      |                |                      |
-| Battery Output Power (disabled)     |                |                      |
-| Cell Temperature (disabled)         |                |                      |
+| *Sensors*                           | *Switches*     | *Sliders*                            |
+|-------------------------------------|----------------|--------------------------------------|
+| Main Battery Level                  | AC Ports       | Backup Reserve Level                 |
+| Battery Level                       | DC Ports       | Max Charge Limit                     |
+| AC Input Power                      | Backup Reserve | Min Discharge Limit                  |
+| AC Output Power                     | USB Ports      | AC Charging Speed                    |
+| DC 12V Port Output Power            |                | DC Charging Max Amps                 |
+| DC Port Input Power                 |                | DC (2) Charging Max Amps (Plus only) |
+| DC Port Input State                 |                |                                      |
+| DC Port (2) Input Power (Plus only) |                |                                      |
+| DC Port (2) Input State (Plus only) |                |                                      |
+| Solar Power                         |                |                                      |
+| Solar Power (2) (Plus only)         |                |                                      |
+| Input Power Total                   |                |                                      |
+| Output Power Total                  |                |                                      |
+| USB A Output Power                  |                |                                      |
+| USB A (2) Output Power              |                |                                      |
+| USB C Output Power                  |                |                                      |
+| USB C (2) Output Power              |                |                                      |
+| AC Plugged In                       |                |                                      |
+| Battery Input Power (disabled)      |                |                                      |
+| Battery Output Power (disabled)     |                |                                      |
+| Cell Temperature (disabled)         |                |                                      |
 </details>
 
 <details><summary>
@@ -102,7 +102,7 @@ Recognized devices:
 | Main Battery Level          | AC Ports       | Backup Reserve Level |
 | Battery Level               | DC Ports       | Max Charge Limit     |
 | AC Input Power              | Backup Reserve | Min Discharge Limit  |
-| AC LV Output Power          |                |                      |
+| AC LV Output Power          |                | AC Charging Speed    |
 | AC HV Output Power          |                |                      |
 | DC 12V Output Power         |                |                      |
 | DC LV Input Power           |                |                      |

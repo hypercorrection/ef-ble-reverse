@@ -1,11 +1,7 @@
 import logging
-from collections.abc import Sequence
-from dataclasses import dataclass
-from typing import Any
 
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
-from google.protobuf.message import Message
 
 from ..commands import TimeCommands
 from ..devicebase import DeviceBase
@@ -18,13 +14,20 @@ from ..props import (
     proto_attr_mapper,
     repeated_pb_field_type,
 )
+from ..props.enums import IntFieldValue
 
 _LOGGER = logging.getLogger(__name__)
 
 pb = proto_attr_mapper(pr705_pb2.DisplayPropertyUpload)
 
 
-@dataclass
+class DcChargingType(IntFieldValue):
+    UNKNOWN = -1
+    AUTO = 0
+    CAR = 1
+    SOLAR = 2
+
+
 class _StatField(
     repeated_pb_field_type(
         list_field=pb.display_statistics_sum.list_info,
@@ -81,6 +84,9 @@ class Device(DeviceBase, ProtobufProps):
     usba_output_power = pb_field(pb.pow_get_qcusb1, _out_power)
     usba_output_energy = _StatField(pr705_pb2.STATISTICS_OBJECT_USBA_OUT_ENERGY)
 
+    ac_charging_speed = pb_field(pb.plug_in_info_ac_in_chg_pow_max)
+    max_ac_charging_power = pb_field(pb.plug_in_info_ac_in_chg_hal_pow_max)
+
     plugged_in_ac = pb_field(pb.plug_in_info_ac_charger_flag)
     energy_backup = pb_field(pb.energy_backup_en)
     energy_backup_battery_level = pb_field(pb.energy_backup_start_soc)
@@ -95,11 +101,16 @@ class Device(DeviceBase, ProtobufProps):
     dc_12v_port = pb_field(pb.flow_info_12v, _flow_is_on)
     ac_ports = pb_field(pb.flow_info_ac_out, _flow_is_on)
 
+    dc_charging_type = pb_field(pb.pv_chg_type, lambda x: DcChargingType.from_value(x))
+    dc_charging_max_amps = pb_field(pb.plug_in_info_pv_dc_amp_max)
+    dc_charging_current_max = Field[int]()
+
     def __init__(
         self, ble_dev: BLEDevice, adv_data: AdvertisementData, sn: str
     ) -> None:
         super().__init__(ble_dev, adv_data, sn)
         self._time_commands = TimeCommands(self)
+        self.dc_charging_current_max = 8
 
     @classmethod
     def check(cls, sn):
@@ -187,14 +198,12 @@ class Device(DeviceBase, ProtobufProps):
         await self._send_config_packet(config)
 
     async def enable_dc_12v_port(self, enabled: bool):
-        config = pr705_pb2.ConfigWrite()
-        config.cfg_dc_12v_out_open = enabled
-        await self._send_config_packet(config)
+        await self._send_config_packet(
+            pr705_pb2.ConfigWrite(cfg_dc_12v_out_open=enabled)
+        )
 
     async def enable_ac_ports(self, enabled: bool):
-        config = pr705_pb2.ConfigWrite()
-        config.cfg_ac_out_open = enabled
-        await self._send_config_packet(config)
+        await self._send_config_packet(pr705_pb2.ConfigWrite(cfg_ac_out_open=enabled))
 
     async def set_battery_charge_limit_min(self, limit: int):
         if (
@@ -203,10 +212,7 @@ class Device(DeviceBase, ProtobufProps):
         ):
             return False
 
-        config = pr705_pb2.ConfigWrite()
-        config.cfg_min_dsg_soc = limit
-
-        await self._send_config_packet(config)
+        await self._send_config_packet(pr705_pb2.ConfigWrite(cfg_min_dsg_soc=limit))
         return True
 
     async def set_battery_charge_limit_max(self, limit: int):
@@ -216,8 +222,38 @@ class Device(DeviceBase, ProtobufProps):
         ):
             return False
 
-        config = pr705_pb2.ConfigWrite()
-        config.cfg_max_chg_soc = limit
+        await self._send_config_packet(
+            message=pr705_pb2.ConfigWrite(cfg_max_chg_soc=limit)
+        )
+        return True
 
-        await self._send_config_packet(config)
+    async def set_ac_charging_speed(self, value: int):
+        if (
+            self.max_ac_charging_power is None
+            or value > self.max_ac_charging_power
+            or value < 0
+        ):
+            return False
+
+        await self._send_config_packet(
+            pr705_pb2.ConfigWrite(cfg_plug_in_info_ac_in_chg_pow_max=value)
+        )
+        return True
+
+    async def set_dc_charging_type(self, state: DcChargingType):
+        await self._send_config_packet(
+            pr705_pb2.ConfigWrite(cfg_pv_chg_type=state.value)
+        )
+
+    async def set_dc_charging_amps_max(self, value: int):
+        if (
+            self.dc_charging_current_max is None
+            or value < 0
+            or value > self.dc_charging_current_max
+        ):
+            return False
+
+        await self._send_config_packet(
+            pr705_pb2.ConfigWrite(cfg_plug_in_info_pv_dc_amp_max=value)
+        )
         return True
