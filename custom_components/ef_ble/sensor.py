@@ -1,5 +1,9 @@
 """EcoFlow BLE sensor"""
 
+import itertools
+from dataclasses import dataclass, field
+from typing import Any
+
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -16,87 +20,148 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from custom_components.ef_ble.eflib import DeviceBase
-
 from . import DeviceConfigEntry
+from .eflib import DeviceBase
+from .eflib.devices import shp2
 from .entity import EcoflowEntity
+
+_UPPER_WORDS = ["ac", "dc", "lv", "hv", "tt", "5p8"]
+
+
+def _auto_name_from_key(key: str):
+    return " ".join(
+        [
+            part.capitalize() if part.lower() not in _UPPER_WORDS else part.upper()
+            for part in key.split("_")
+        ]
+    )
+
+
+@dataclass(frozen=True, kw_only=True)
+class EcoflowSensorEntityDescription(SensorEntityDescription):
+    state_attribute_fields: list[str] = field(default_factory=list)
+
 
 SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     # Common
-    "battery_level": SensorEntityDescription(
+    "battery_level": EcoflowSensorEntityDescription(
         key="battery_level",
-        name="Battery Level",
         native_unit_of_measurement=PERCENTAGE,
         device_class=SensorDeviceClass.BATTERY,
         state_class=SensorStateClass.MEASUREMENT,
+        state_attribute_fields=["cycles"],
     ),
     "battery_level_main": SensorEntityDescription(
         key="battery_level_main",
-        name="Main Battery Level",
         native_unit_of_measurement=PERCENTAGE,
         device_class=SensorDeviceClass.BATTERY,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     "input_power": SensorEntityDescription(
         key="input_power",
-        name="Input Power",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=0,
-        icon="mdi:home-lightning-bolt-outline",
     ),
     "output_power": SensorEntityDescription(
         key="output_power",
-        name="Output Power",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=0,
-        icon="mdi:home-lightning-bolt-outline",
     ),
     # SHP2
     "grid_power": SensorEntityDescription(
         key="grid_power",
-        name="Grid Power",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
-        icon="mdi:transmission-tower",
     ),
     "in_use_power": SensorEntityDescription(
         key="in_use_power",
-        name="In Use Power",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
-        icon="mdi:home-lightning-bolt-outline",
     ),
+    **{
+        f"circuit_power_{i}": SensorEntityDescription(
+            key=f"circuit_power_{i}",
+            device_class=SensorDeviceClass.POWER,
+            native_unit_of_measurement=UnitOfPower.WATT,
+            state_class=SensorStateClass.MEASUREMENT,
+            suggested_display_precision=2,
+            translation_key="circuit_power",
+            translation_placeholders={"index": f"{i:02}"},
+        )
+        for i in range(1, shp2.Device.NUM_OF_CIRCUITS + 1)
+    },
+    **{
+        f"circuit_current_{i}": SensorEntityDescription(
+            key=f"circuit_current_{i}",
+            device_class=SensorDeviceClass.CURRENT,
+            native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+            suggested_display_precision=2,
+            entity_registry_enabled_default=False,
+            translation_key="circuit_current",
+            translation_placeholders={"index": f"{i:02}"},
+        )
+        for i in range(1, shp2.Device.NUM_OF_CIRCUITS + 1)
+    },
+    **{
+        f"channel_power_{i}": SensorEntityDescription(
+            key=f"channel_power_{i}",
+            device_class=SensorDeviceClass.POWER,
+            native_unit_of_measurement=UnitOfPower.WATT,
+            suggested_display_precision=2,
+            translation_key="channel_power",
+            translation_placeholders={"index": f"{i:02}"},
+        )
+        for i in range(1, shp2.Device.NUM_OF_CHANNELS + 1)
+    },
     # DPU
-    "lv_solar_power": SensorEntityDescription(
-        key="lv_solar_power",
-        name="LV Solar Power",
-        native_unit_of_measurement=UnitOfPower.WATT,
-        device_class=SensorDeviceClass.POWER,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=2,
-        icon="mdi:solar-panel",
-    ),
-    "hv_solar_power": SensorEntityDescription(
-        key="hv_solar_power",
-        name="HV Solar Power",
-        native_unit_of_measurement=UnitOfPower.WATT,
-        device_class=SensorDeviceClass.POWER,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=2,
-        icon="mdi:solar-panel-large",
-    ),
+    **{
+        f"{sensor}_{measurement}": SensorEntityDescription(
+            key=f"{sensor}_{measurement}",
+            native_unit_of_measurement=UnitOfPower.WATT,
+            device_class=SensorDeviceClass.POWER,
+            state_class=SensorStateClass.MEASUREMENT,
+            translation_key=f"port_{measurement}",
+            translation_placeholders={"name": _auto_name_from_key(sensor)},
+            suggested_display_precision=2,
+        )
+        for measurement, sensor in itertools.product(
+            ["power"],
+            [
+                "lv_solar",
+                "hv_solar",
+                "ac_l1_1_out",
+                "ac_l1_2_out",
+                "ac_l2_1_out",
+                "ac_l2_2_out",
+                "ac_l14_out",
+                "ac_tt_out",
+                "ac_5p8_out",
+            ],
+        )
+    },
+    **{
+        f"battery_{i}_battery_level": SensorEntityDescription(
+            key=f"battery_{i}_battery_level",
+            native_unit_of_measurement=PERCENTAGE,
+            device_class=SensorDeviceClass.BATTERY,
+            state_class=SensorStateClass.MEASUREMENT,
+            translation_key="additional_battery_level",
+            translation_placeholders={"index": f"{i}"},
+            entity_registry_enabled_default=False,
+        )
+        for i in range(1, 6)
+    },
     # River 3, Delta 3
     "input_energy": SensorEntityDescription(
         key="input_energy",
-        name="Input Energy Total",
         native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
@@ -105,7 +170,6 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     ),
     "output_energy": SensorEntityDescription(
         key="output_energy",
-        name="Output Energy Total",
         native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
@@ -114,8 +178,6 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     ),
     "ac_input_power": SensorEntityDescription(
         key="ac_input_power",
-        name="AC Input Power",
-        icon="mdi:current-ac",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
@@ -123,8 +185,6 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     ),
     "ac_output_power": SensorEntityDescription(
         key="ac_output_power",
-        name="AC Output Power",
-        icon="mdi:current-ac",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
@@ -132,8 +192,6 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     ),
     "ac_input_energy": SensorEntityDescription(
         key="ac_input_energy",
-        name="AC Input Energy",
-        icon="mdi:current-ac",
         native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
@@ -142,8 +200,6 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     ),
     "ac_output_energy": SensorEntityDescription(
         key="ac_output_energy",
-        name="AC Output Energy",
-        icon="mdi:current-ac",
         native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
@@ -152,7 +208,6 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     ),
     "dc_input_power": SensorEntityDescription(
         key="dc_input_power",
-        name="DC Input Power",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
@@ -160,8 +215,6 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     ),
     "dc_input_energy": SensorEntityDescription(
         key="dc_input_energy",
-        name="DC Input Energy",
-        icon="mdi:current-dc",
         native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
@@ -170,8 +223,6 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     ),
     "dc12v_output_power": SensorEntityDescription(
         key="dc12v_output_power",
-        name="DC 12V Output Power",
-        icon="mdi:current-dc",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
@@ -179,8 +230,6 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     ),
     "dc12v_output_energy": SensorEntityDescription(
         key="dc12v_output_energy",
-        name="DC 12V Output Energy",
-        icon="mdi:current-dc",
         native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
@@ -189,16 +238,12 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     ),
     "usbc_output_power": SensorEntityDescription(
         key="usbc_output_power",
-        name="USB C Output Power",
-        icon="mdi:usb-c-port",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     "usbc_output_energy": SensorEntityDescription(
         key="usbc_output_energy",
-        name="USB C Output Energy",
-        icon="mdi:usb-c-port",
         native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
@@ -207,16 +252,12 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     ),
     "usba_output_power": SensorEntityDescription(
         key="usba_output_power",
-        name="USB A Output Power",
-        icon="mdi:usb-port",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     "usba_output_energy": SensorEntityDescription(
         key="usba_output_energy",
-        name="USB A Output Energy",
-        icon="mdi:usb-port",
         native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
@@ -225,23 +266,18 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     ),
     "usbc2_output_power": SensorEntityDescription(
         key="usbc2_output_power",
-        name="USB C (2) Output Power",
-        icon="mdi:usb-c-port",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     "usba2_output_power": SensorEntityDescription(
         key="usba2_output_power",
-        name="USB A (2) Output Power",
-        icon="mdi:usb-port",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     "battery_input_power": SensorEntityDescription(
         key="battery_input_power",
-        name="Battery Input Power",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
@@ -249,15 +285,13 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     ),
     "battery_output_power": SensorEntityDescription(
         key="battery_output_power",
-        name="Battery Output Power",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         entity_registry_enabled_default=False,
     ),
     "cell_temperature": SensorEntityDescription(
-        key="temperature",
-        name="Cell Temperature",
+        key="cell_temperature",
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
@@ -265,8 +299,6 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     ),
     "dc_port_input_power": SensorEntityDescription(
         key="dc_port_input_power",
-        name="DC Port Input Power",
-        icon="mdi:current-dc",
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfPower.WATT,
@@ -274,29 +306,21 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     ),
     "dc_port_2_input_power": SensorEntityDescription(
         key="dc_port_input_power_2",
-        name="DC Port (2) Input Power",
-        icon="mdi:current-dc",
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfPower.WATT,
         suggested_display_precision=2,
     ),
     "dc_port_state": SensorEntityDescription(
-        key="dc_port_1_state",
-        name="DC Input Port State",
-        icon="mdi:current-dc",
+        key="dc_port_state",
         device_class=SensorDeviceClass.ENUM,
     ),
     "dc_port_2_state": SensorEntityDescription(
         key="dc_port_2_state",
-        name="DC Input Port (2) State ",
-        icon="mdi:current-dc",
         device_class=SensorDeviceClass.ENUM,
     ),
     "solar_input_power": SensorEntityDescription(
         key="input_power_solar",
-        name="Solar Power",
-        icon="mdi:solar-power-variant-outline",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
@@ -304,8 +328,6 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     ),
     "solar_input_power_2": SensorEntityDescription(
         key="input_power_solar_2",
-        name="Solar Power (2)",
-        icon="mdi:solar-power-variant-outline",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
@@ -314,8 +336,6 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     # DP3
     "ac_lv_output_power": SensorEntityDescription(
         key="ac_lv_output_power",
-        name="AC LV Output Power",
-        icon="mdi:current-ac",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
@@ -323,8 +343,6 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     ),
     "ac_hv_output_power": SensorEntityDescription(
         key="ac_hv_output_power",
-        name="AC HV Output Power",
-        icon="mdi:current-ac",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
@@ -332,8 +350,6 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     ),
     "solar_lv_power": SensorEntityDescription(
         key="input_power_solar_lv",
-        name="LV Solar Power",
-        icon="mdi:solar-power-variant-outline",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
@@ -341,8 +357,6 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     ),
     "solar_hv_power": SensorEntityDescription(
         key="input_power_solar_hv",
-        name="HV Solar Power",
-        icon="mdi:solar-power-variant-outline",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
@@ -350,8 +364,6 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     ),
     "dc_lv_input_power": SensorEntityDescription(
         key="dc_lv_input_power",
-        name="LV DC Port Input Power",
-        icon="mdi:current-dc",
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfPower.WATT,
@@ -359,8 +371,6 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     ),
     "dc_hv_input_power": SensorEntityDescription(
         key="dc_hv_input_power",
-        name="LV DC Port Input Power",
-        icon="mdi:current-dc",
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfPower.WATT,
@@ -368,14 +378,10 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
     ),
     "dc_lv_state": SensorEntityDescription(
         key="dc_lv_state",
-        name="LV DC Input Port State",
-        icon="mdi:current-dc",
         device_class=SensorDeviceClass.ENUM,
     ),
     "dc_hv_state": SensorEntityDescription(
         key="dc_hv_state",
-        name="HV DC Input Port State",
-        icon="mdi:current-dc",
         device_class=SensorDeviceClass.ENUM,
     ),
 }
@@ -395,17 +401,6 @@ async def async_setup_entry(
         if hasattr(device, sensor)
     ]
 
-    # SHP2 sensors
-    if hasattr(device, "circuit_power"):
-        for i in range(len(device.circuit_power)):
-            new_sensors.append(CircuitPowerSensor(device, i))
-    if hasattr(device, "circuit_current"):
-        for i in range(len(device.circuit_current)):
-            new_sensors.append(CircuitCurrentSensor(device, i))
-    if hasattr(device, "channel_power"):
-        for i in range(len(device.channel_power)):
-            new_sensors.append(ChannelPowerSensor(device, i))
-
     if new_sensors:
         async_add_entities(new_sensors)
 
@@ -422,13 +417,30 @@ class EcoflowSensor(EcoflowEntity, SensorEntity):
 
         if sensor in SENSOR_TYPES:
             self.entity_description = SENSOR_TYPES[sensor]
-        else:
-            self._attr_state_class = SensorStateClass.MEASUREMENT
+            if self.entity_description.translation_key is None:
+                self._attr_translation_key = self.entity_description.key
+
+        self._attribute_fields = (
+            self.entity_description.state_attribute_fields
+            if isinstance(self.entity_description, EcoflowSensorEntityDescription)
+            else []
+        )
 
     @property
     def native_value(self):
         """Return the value of the sensor."""
         return getattr(self._device, self._sensor, None)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if not self._attribute_fields:
+            return {}
+
+        return {
+            field_name: getattr(self._device, field_name)
+            for field_name in self._attribute_fields
+            if hasattr(self._device, field_name)
+        }
 
     async def async_added_to_hass(self):
         """Run when this Entity has been added to HA."""
@@ -437,67 +449,3 @@ class EcoflowSensor(EcoflowEntity, SensorEntity):
     async def async_will_remove_from_hass(self):
         """Entity being removed from hass."""
         self._device.remove_callback(self.async_write_ha_state, self._sensor)
-
-
-class CircuitPowerSensor(EcoflowSensor):
-    """Represents circuit consumed wattage."""
-
-    device_class = SensorDeviceClass.POWER
-    _attr_native_unit_of_measurement = UnitOfPower.WATT
-    _attr_suggested_display_precision = 2
-
-    def __init__(self, device, index):
-        """Initialize the sensor."""
-        super().__init__(device, f"circuit_power_{index}")
-
-        self._attr_unique_id = f"{self._device.name}_circuit_power_{index + 1}"
-        self._attr_name = f"Circuit Power {index + 1:02d}"
-        self._index = index
-
-    @property
-    def native_value(self) -> float:
-        """Return the value of the sensor."""
-        return self._device.circuit_power[self._index]
-
-
-class CircuitCurrentSensor(EcoflowSensor):
-    """Represents circuit consumed amperage."""
-
-    device_class = SensorDeviceClass.CURRENT
-    _attr_native_unit_of_measurement = UnitOfElectricCurrent.AMPERE
-    _attr_suggested_display_precision = 2
-    _attr_entity_registry_enabled_default = False
-
-    def __init__(self, device, index):
-        """Initialize the sensor."""
-        super().__init__(device, f"circuit_current_{index}")
-
-        self._attr_unique_id = f"{self._device.name}_circuit_current_{index + 1}"
-        self._attr_name = f"Circuit Current {index + 1:02d}"
-        self._index = index
-
-    @property
-    def native_value(self) -> float:
-        """Return the value of the sensor."""
-        return self._device.circuit_current[self._index]
-
-
-class ChannelPowerSensor(EcoflowSensor):
-    """Represents backup channel wattage."""
-
-    device_class = SensorDeviceClass.POWER
-    _attr_native_unit_of_measurement = UnitOfPower.WATT
-    _attr_suggested_display_precision = 2
-
-    def __init__(self, device, index):
-        """Initialize the sensor."""
-        super().__init__(device, f"channel_power_{index}")
-
-        self._attr_unique_id = f"{self._device.name}_channel_power_{index + 1}"
-        self._attr_name = f"Channel Power {index + 1}"
-        self._index = index
-
-    @property
-    def native_value(self) -> float:
-        """Return the value of the sensor."""
-        return self._device.channel_power[self._index]

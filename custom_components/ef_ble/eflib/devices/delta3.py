@@ -7,7 +7,7 @@ from google.protobuf.message import Message
 from ..commands import TimeCommands
 from ..devicebase import DeviceBase
 from ..packet import Packet
-from ..pb import pd335_sys_pb2
+from ..pb import pd335_bms_bp_pb2, pd335_sys_pb2
 from ..props import (
     Field,
     ProtobufProps,
@@ -31,34 +31,37 @@ def _flow_is_on(x):
 
 
 pb = proto_attr_mapper(pd335_sys_pb2.DisplayPropertyUpload)
+pb_bms = proto_attr_mapper(pd335_bms_bp_pb2.BMSHeartBeatReport)
 
 
 class _DcChargingMaxField(
     repeated_pb_field_type(
         list_field=pb.plug_in_info_pv_chg_max_list.pv_chg_max_item,
         value_field=lambda x: x.pv_chg_amp_max,
+        per_item=True,
     )
 ):
     vol_type: int
 
-    def process_item(self, value: pd335_sys_pb2.PvChgMaxItem) -> int | None:
-        return value.pv_chg_amp_max if value.pv_chg_vol_type == self.vol_type else None
+    def get_value(self, item: pd335_sys_pb2.PvChgMaxItem) -> int | None:
+        return item.pv_chg_amp_max if item.pv_chg_vol_type == self.vol_type else None
 
 
 class _DcAmpSettingField(
     repeated_pb_field_type(
         list_field=pb.pv_dc_chg_setting_list.list_info,
         value_field=lambda x: x.pv_chg_amp_limit,
+        per_item=True,
     )
 ):
     vol_type: int
     plug_index: int
 
-    def process_item(self, value: pd335_sys_pb2.PvDcChgSetting) -> int | None:
+    def get_value(self, item: pd335_sys_pb2.PvDcChgSetting) -> int | None:
         return (
-            value.pv_chg_amp_limit
-            if value.pv_plug_index == self.plug_index
-            and value.pv_chg_vol_spec == self.vol_type
+            item.pv_chg_amp_limit
+            if item.pv_plug_index == self.plug_index
+            and item.pv_chg_vol_spec == self.vol_type
             else None
         )
 
@@ -120,6 +123,8 @@ class Device(DeviceBase, ProtobufProps):
     )
     dc_charging_current_max = _DcChargingMaxField(pd335_sys_pb2.PV_CHG_VOL_SPEC_12V)
 
+    cycles = pb_field(pb_bms.cycles)
+
     def __init__(
         self, ble_dev: BLEDevice, adv_data: AdvertisementData, sn: str
     ) -> None:
@@ -152,17 +157,21 @@ class Device(DeviceBase, ProtobufProps):
             p.ParseFromString(packet.payload)
             _LOGGER.debug("%s: %s: Parsed data: %r", self.address, self.name, packet)
             # _LOGGER.debug("Delta 3 Parsed Message \n %s", str(p))
+            self.update_from_message(p, reset=True)
+
+            p = pd335_bms_bp_pb2.BMSHeartBeatReport()
+            p.ParseFromString(packet.payload)
             self.update_from_message(p)
+
+            # _LOGGER.debug("Delta 3 BMS Report \n %s", str(p))
             processed = True
         elif (
             packet.src == 0x35
             and packet.cmdSet == 0x01
             and packet.cmdId == Packet.NET_BLE_COMMAND_CMD_SET_RET_TIME
         ):
-            # Device requested for time and timezone offset, so responding with that
-            # otherwise it will not be able to send us predictions and config data
             if len(packet.payload) == 0:
-                self._time_commands.async_send_all()
+                await self._time_commands.async_send_all()
             processed = True
 
         self.solar_input_power = (
