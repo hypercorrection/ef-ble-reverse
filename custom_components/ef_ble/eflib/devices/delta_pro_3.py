@@ -120,11 +120,9 @@ class Device(DeviceBase, ProtobufProps):
         processed = False
 
         if packet.src == 0x02 and packet.cmdSet == 0xFE and packet.cmdId == 0x15:
-            p = mr521_pb2.DisplayPropertyUpload()
-            p.ParseFromString(packet.payload)
             _LOGGER.debug("%s: %s: Parsed data: %r", self.address, self.name, packet)
-            # _LOGGER.debug("Delta Pro 3 Parsed Message \n %s", str(p))
-            self.update_from_message(p)
+            self.update_from_bytes(mr521_pb2.DisplayPropertyUpload, packet.payload)
+
             processed = True
         elif (
             packet.src == 0x35
