@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 from collections.abc import Mapping
@@ -28,6 +29,7 @@ from homeassistant.helpers.storage import Store
 
 from . import eflib
 from .const import (
+    CONF_CONNECTION_TIMEOUT,
     CONF_LOG_BLEAK,
     CONF_LOG_CONNECTION,
     CONF_LOG_ENCRYPTED_PAYLOADS,
@@ -37,6 +39,8 @@ from .const import (
     CONF_LOG_PAYLOADS,
     CONF_UPDATE_PERIOD,
     CONF_USER_ID,
+    DEFAULT_CONNECTION_TIMEOUT,
+    DEFAULT_UPDATE_PERIOD,
     DOMAIN,
 )
 from .eflib.connection import ConnectionState
@@ -62,7 +66,7 @@ class EFBLEConfigFlow(ConfigFlow, domain=DOMAIN):
         self._user_id: str = ""
         self._email: str = ""
         self._user_id_validated: bool = False
-        self._log_options = LogOptions(0)
+        self._log_options = LogOptions.no_options()
         self._collapsed = True
 
     async def async_step_bluetooth(
@@ -117,6 +121,7 @@ class EFBLEConfigFlow(ConfigFlow, domain=DOMAIN):
                     **self._login_option(),
                     vol.Required(CONF_ADDRESS): vol.In([f"{title} ({device.address})"]),
                     **_update_period_option(),
+                    **_timeout_option(),
                     **ConfLogOptions.schema(
                         ConfLogOptions.to_config(self._log_options)
                     ),
@@ -176,6 +181,7 @@ class EFBLEConfigFlow(ConfigFlow, domain=DOMAIN):
                     **self._login_option(),
                     vol.Required(CONF_ADDRESS): vol.In(self._discovered_devices.keys()),
                     **_update_period_option(),
+                    **_timeout_option(),
                     **ConfLogOptions.schema(
                         ConfLogOptions.to_config(self._log_options)
                     ),
@@ -242,6 +248,7 @@ class EFBLEConfigFlow(ConfigFlow, domain=DOMAIN):
         self._email = user_input.get("login", {}).get(CONF_EMAIL, "")
         password = user_input.get("login", {}).get(CONF_PASSWORD, "")
         user_id = user_input.get(CONF_USER_ID, "")
+        timeout = user_input.get(CONF_CONNECTION_TIMEOUT, 20)
 
         self._collapsed = False
 
@@ -259,9 +266,10 @@ class EFBLEConfigFlow(ConfigFlow, domain=DOMAIN):
 
         device.with_logging_options(ConfLogOptions.from_config(user_input))
 
-        await device.connect(self._user_id, max_attempts=4)
-        await device.waitConnected(timeout=20)
-        conn_state = device.connection_state
+        await device.connect(self._user_id)
+        conn_state = await asyncio.wait_for(
+            device.wait_until_authenticated_or_error(), timeout
+        )
         await device.disconnect()
 
         error = None
@@ -282,7 +290,7 @@ class EFBLEConfigFlow(ConfigFlow, domain=DOMAIN):
             case _:
                 error = "error_try_refresh"
 
-        await device.waitDisconnected()
+        await device.wait_disconnected()
 
         if error is not None:
             return {"base": error}
@@ -311,7 +319,13 @@ class EFBLEConfigFlow(ConfigFlow, domain=DOMAIN):
                 "Content-Type": "application/json",
             },
         ) as response:
-            response.raise_for_status()
+            if not response.ok:
+                return {
+                    "login": (
+                        f"Login failed with status code {response.status}: "
+                        f"{response.reason}"
+                    )
+                }
 
             result_json = await response.json()
             if result_json["code"] != "0":
@@ -330,7 +344,9 @@ class OptionsFlowHandler(OptionsFlow):
 
         merged_entry = self.config_entry.data | self.config_entry.options
         options = {
-            CONF_UPDATE_PERIOD: merged_entry.get(CONF_UPDATE_PERIOD, 0),
+            CONF_UPDATE_PERIOD: merged_entry.get(
+                CONF_UPDATE_PERIOD, DEFAULT_UPDATE_PERIOD
+            ),
         }
 
         device: eflib.DeviceBase | None = getattr(
@@ -370,7 +386,7 @@ class ConfLogOptions:
     @classmethod
     def from_config(cls, config_entry: Mapping[str, Any]):
         config_entry = config_entry.get(cls.CONF_KEY, config_entry)
-        log_options = LogOptions(0)
+        log_options = LogOptions.no_options()
         for conf_option, log_option in cls._CONF_OPTION_TO_LOG_OPTION.items():
             if config_entry.get(conf_option, False):
                 log_options |= log_option
@@ -407,9 +423,17 @@ class ConfLogOptions:
         }
 
 
-def _update_period_option(default: int = 0):
+def _update_period_option(default: int = DEFAULT_UPDATE_PERIOD):
     return {
         vol.Optional(CONF_UPDATE_PERIOD, default=default): vol.All(
+            int, vol.Range(min=0)
+        )
+    }
+
+
+def _timeout_option(default: int = DEFAULT_CONNECTION_TIMEOUT):
+    return {
+        vol.Optional(CONF_CONNECTION_TIMEOUT, default=default): vol.All(
             int, vol.Range(min=0)
         )
     }
