@@ -12,7 +12,7 @@ from custom_components.ef_ble.eflib import DeviceBase
 from custom_components.ef_ble.eflib.devices import alternator_charger, smart_generator
 
 from . import DeviceConfigEntry
-from .eflib.devices import river3, river3_plus
+from .eflib.devices import river3, river3_plus, stream_ac
 from .entity import EcoflowEntity
 
 
@@ -36,6 +36,7 @@ SELECT_TYPES: list[EcoflowSelectEntityDescription] = [
     ),
     EcoflowSelectEntityDescription[river3.Device](
         key="dc_charging_type",
+        name="DC Charging Type",
         options=river3.DcChargingType.options(include_unknown=False),
         set_state=(
             lambda device, value: device.set_dc_charging_type(
@@ -68,6 +69,16 @@ SELECT_TYPES: list[EcoflowSelectEntityDescription] = [
         set_state=(
             lambda device, value: device.set_charger_mode(
                 alternator_charger.ChargerMode[value.upper()]
+            )
+        ),
+    ),
+    EcoflowSelectEntityDescription[stream_ac.Device](
+        key="energy_strategy",
+        name="Energy Strategy",
+        options=stream_ac.EnergyStrategy.options(include_unknown=False),
+        set_state=(
+            lambda device, value: device.set_energy_strategy(
+                stream_ac.EnergyStrategy[value.upper()]
             )
         ),
     ),
@@ -156,6 +167,15 @@ class EcoflowSelect(EcoflowEntity, SelectEntity):
     def availability_updated(self, state: bool):
         self._attr_available = state
         self.async_write_ha_state()
+        self._register_update_callback(
+            entity_attr="_attr_current_option",
+            prop_name=self._prop_name,
+            get_state=(
+                lambda value: value.name.lower()
+                if value is not None
+                else self.SkipWrite
+            ),
+        )
 
     async def async_select_option(self, option: str) -> None:
         if self._set_state is not None:
