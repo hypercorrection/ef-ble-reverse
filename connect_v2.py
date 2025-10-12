@@ -17,39 +17,13 @@ from bleak_retry_connector import (
 
 import hashlib
 import ecdsa
-from fastcrc import crc16
+from fastcrc import crc8, crc16
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 
 import utc_sys_pb2_v4 as utc_sys_pb2
 import yj751_sys_pb2_v4 as yj751_sys_pb2
 import pd303_pb2_v4 as pd303_pb2
-
-CRC8_DELTA2_TABLE = [
-    0, 7, 14, 9, 28, 27, 18, 21, 56, 63, 54, 49, 36, 35, 42, 45,
-    112, 119, 126, 121, 108, 107, 98, 101, 72, 79, 70, 65, 84, 83, 90, 93,
-    224, 231, 238, 233, 252, 251, 242, 245, 216, 223, 214, 209, 196, 195, 202, 205,
-    144, 151, 158, 153, 140, 139, 130, 133, 168, 175, 166, 161, 180, 179, 186, 189,
-    199, 192, 201, 206, 219, 220, 213, 210, 255, 248, 241, 246, 227, 228, 237, 234,
-    183, 176, 185, 190, 171, 172, 165, 162, 143, 136, 129, 134, 147, 148, 157, 154,
-    39, 32, 41, 46, 59, 60, 53, 50, 31, 24, 17, 22, 3, 4, 13, 10,
-    87, 80, 89, 94, 75, 76, 69, 66, 111, 104, 97, 102, 115, 116, 125, 122,
-    137, 142, 135, 128, 149, 146, 155, 156, 177, 182, 191, 184, 173, 170, 163, 164,
-    249, 254, 247, 240, 229, 226, 235, 236, 193, 198, 207, 200, 221, 218, 211, 212,
-    105, 110, 103, 96, 117, 114, 123, 124, 81, 86, 95, 88, 77, 74, 67, 68,
-    25, 30, 23, 16, 5, 2, 11, 12, 33, 38, 47, 40, 61, 58, 51, 52,
-    78, 73, 64, 71, 82, 85, 92, 91, 118, 113, 120, 127, 106, 109, 100, 99,
-    62, 57, 48, 55, 34, 37, 44, 43, 6, 1, 8, 15, 26, 29, 20, 19,
-    174, 169, 160, 167, 178, 181, 188, 187, 150, 145, 152, 159, 138, 141, 132, 131,
-    222, 217, 208, 215, 194, 197, 204, 203, 230, 225, 232, 239, 250, 253, 244, 243,
-]
-
-
-def crc8_delta2(data: bytes) -> int:
-    crc = 0
-    for byte in data:
-        crc = CRC8_DELTA2_TABLE[(crc ^ byte) & 0xFF]
-    return crc
 
 # When you device is bond to your account - it's storing the user_id,
 # which is on of the keys in auth procedure, so UserID need to be extracted.
@@ -219,7 +193,7 @@ class Packet:
     @staticmethod
     def fromBytes(data, is_xor = False):
         '''Deserializes bytes stream into internal data'''
-        if len(data) < 20:
+        if len(data) < 18:
             print("ERROR: Unable to parse packet - too small: " + bytearray(data).hex())
             return None
 
@@ -236,7 +210,7 @@ class Packet:
             return None
 
         # Check header CRC8
-        if crc8_delta2(data[:4]) != data[4]:
+        if crc8.smbus(data[:4]) != data[4]:
             print("ERROR: Unable to parse packet - incorrect header CRC8: " + bytearray(data).hex())
             return None
 
@@ -267,7 +241,7 @@ class Packet:
             payload = data[payload_start:payload_end]
 
             # If first byte of seq is set - we need to xor payload with it to get the real data
-            if is_xor and version >= 0x03 and seq[0] != 0:
+            if is_xor and version >= 0x02 and seq[0] != 0:
                 payload = bytes([c ^ seq[0] for c in payload])
 
             if version == 19 and payload[-2:] == b'\xbb\xbb':
@@ -281,7 +255,7 @@ class Packet:
         data = Packet.PREFIX
         data += struct.pack('<B', self._version) + struct.pack('<H', len(self._payload))
         # Header crc
-        data += struct.pack('<B', crc8_delta2(data))
+        data += struct.pack('<B', crc8.smbus(data))
         # Additional data
         seq = self._seq if len(self._seq) == 4 else b'\x00\x00\x00\x00'
         data += self.productByte() + seq
