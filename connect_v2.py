@@ -4,6 +4,7 @@ import sys
 import time
 import struct
 import asyncio
+from datetime import datetime
 
 from bleak import BleakError, BleakScanner
 from bleak.backends.scanner import AdvertisementData
@@ -24,6 +25,7 @@ from Crypto.Util.Padding import pad, unpad
 import utc_sys_pb2_v4 as utc_sys_pb2
 import yj751_sys_pb2_v4 as yj751_sys_pb2
 import pd303_pb2_v4 as pd303_pb2
+from kt210_ble_parser import KT210BleParser, parse_mh200_device_data
 
 # When you device is bond to your account - it's storing the user_id,
 # which is on of the keys in auth procedure, so UserID need to be extracted.
@@ -40,12 +42,18 @@ USER_ID = sys.argv[1] if len(sys.argv) > 1 else None
 #ADDRESS = "A1:B2:C3:D4:E5:F6"
 ADDRESS = sys.argv[2] if len(sys.argv) > 2 else None
 
+# Optional log file path for packet logging
+LOG_FILE = sys.argv[3] if len(sys.argv) > 3 else None
+
 _login_key = b''
 with open('login_key.bin', 'rb') as file:
     _login_key = file.read()
 
 # Storing the found devices here
 located_devices = dict()
+
+# Global packet logger instance (will be initialized in main if LOG_FILE is provided)
+packet_logger = None
 
 def discoveryCallback(device: BLEDevice, advertisement_data: AdvertisementData):
     if device.address not in located_devices:
@@ -68,6 +76,27 @@ def getEcdhTypeSize(curve_num: int):
 class SmartBackupMode:
     OFF = 0
     ON  = 2
+
+class PacketLogger:
+    '''Logs packets to a file with timestamps and direction for later recovery'''
+
+    def __init__(self, log_file_path: str):
+        self._log_file = open(log_file_path, 'a')
+        self._log_file.write(f"\n# Packet log started at {datetime.now().isoformat()}\n")
+        self._log_file.flush()
+
+    def log(self, direction: str, packet: "Packet"):
+        '''Log a packet with direction (SEND/RECV) and timestamp'''
+        timestamp = datetime.now().isoformat()
+        self._log_file.write(f"# {timestamp} [{direction}]\n")
+        self._log_file.write(f"{packet!r}\n")
+        self._log_file.flush()
+
+    def close(self):
+        '''Close the log file'''
+        if self._log_file:
+            self._log_file.write(f"\n# Packet log ended at {datetime.now().isoformat()}\n")
+            self._log_file.close()
 
 class Device:
     MANUFACTURER_KEY = 0xb5b5
@@ -279,7 +308,7 @@ class Packet:
             return b'\x0c'
 
     def __repr__(self):
-        return "Packet(0x{_src:02X}, 0x{_dst:02X}, 0x{_cmd_set:02X}, 0x{_cmd_id:02X}, bytes.fromhex('{_payload_hex}'), 0x{_dsrc:02X}, 0x{_ddst:02X}, 0x{_version:02X}, {_seq}, 0x{_product_id:02X})".format(**vars(self))
+        return "Packet(src=0x{_src:02X}, dst=0x{_dst:02X}, cmd_set=0x{_cmd_set:02X}, cmd_id=0x{_cmd_id:02X}, payload=bytes.fromhex('{_payload_hex}'), dsrc=0x{_dsrc:02X}, ddst=0x{_ddst:02X}, version=0x{_version:02X}, seq={_seq}, product_id=0x{_product_id:02X})".format(**vars(self))
 
 class EncPacket:
     PREFIX = b'\x5A\x5A'
@@ -446,7 +475,7 @@ class Connection:
             print("%s: ParseEncPackets: decrypted payload: %r" % (self._address, bytearray(payload).hex()))
 
             # Parse packet - Y needs xor
-            packet = Packet.fromBytes(payload, self._dev_sn.startswith('Y711'))
+            packet = Packet.fromBytes(payload, True)
             if packet != None:
                 packets.append(packet)
 
@@ -530,6 +559,11 @@ class Connection:
 
     async def sendPacket(self, packet: Packet, response_handler = None):
         print("%s: Sending packet: %r" % (self._address, packet))
+
+        # Log packet if logger is available
+        if packet_logger:
+            packet_logger.log("SEND", packet)
+
         # Wrapping and encrypting with session key
         to_send = EncPacket(
             EncPacket.FRAME_TYPE_PROTOCOL, EncPacket.PAYLOAD_TYPE_VX_PROTOCOL,
@@ -637,6 +671,7 @@ class Connection:
         md5_data = hashlib.md5((USER_ID + self._dev_sn).encode('ASCII')).digest()
         # We need upper case in MD5 data here
         payload = ("".join("{:02X}".format(c) for c in md5_data)).encode('ASCII')
+        print(f"MD5 payload: {payload}")
 
         # Forming packet
         packet = Packet(0x21, 0x35, 0x35, 0x86, payload, 0x01, 0x01, 0x02)
@@ -648,6 +683,10 @@ class Connection:
         packets = await self.parseEncPackets(bytes(recv_data))
 
         for packet in packets:
+            # Log received packet if logger is available
+            if packet_logger:
+                packet_logger.log("RECV", packet)
+
             processed = False
             send_reply = False
 
@@ -728,7 +767,14 @@ class Connection:
                 processed = True
                 send_reply = True
                 pass
-
+            elif packet.dst == 33 and packet.cmdSet == 66 and packet.cmdId == 80:
+               data = KT210BleParser.parse(packet.payload)
+               # print(KT210BleParser.format_output(data))
+               # processed = True
+            # elif packet.dst == 0x21 and packet.cmdSet == 0x42 and packet.cmdId == 0x61:
+                # print(f"------ {len(packet.payload)} bytes --------")
+                # print(parse_mh200_device_data(packet.payload))
+                #
             if send_reply:
                 # We need to resend packets back to device to enable device to send the additional info
                 await self.replyPacket(packet)
@@ -863,6 +909,13 @@ class Connection:
 
 
 async def main(address):
+    global packet_logger
+
+    # Initialize packet logger if LOG_FILE is specified
+    if LOG_FILE:
+        packet_logger = PacketLogger(LOG_FILE)
+        print(f"INFO: Packet logging enabled to {LOG_FILE}")
+
     scanner = BleakScanner(discoveryCallback)
     print("INFO: starting scanner")
     async with scanner:
@@ -874,6 +927,10 @@ async def main(address):
         d = located_devices[address.upper()]
         await d.connect()
         await d.waitDisconnect()
+
+    # Close the packet logger if it was opened
+    if packet_logger:
+        packet_logger.close()
 
 if __name__ == "__main__":
     asyncio.run(main(ADDRESS))
